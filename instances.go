@@ -13,9 +13,12 @@ import (
 )
 
 type InstancesCommand struct {
-	Role string
-	Env  string
-	Ui   cli.Ui
+	Role    string
+	Env     string
+	Region  string
+	Public  bool
+	Private bool
+	Ui      cli.Ui
 }
 
 func instancesCmdFactory() (cli.Command, error) {
@@ -27,8 +30,11 @@ func instancesCmdFactory() (cli.Command, error) {
 	}
 
 	return &InstancesCommand{
-		Role: "",
-		Env:  "",
+		Role:    "",
+		Env:     "",
+		Region:  "",
+		Public:  false,
+		Private: false,
 		Ui: &cli.ColoredUi{
 			Ui:          ui,
 			OutputColor: cli.UiColorBlue,
@@ -41,11 +47,18 @@ func (c *InstancesCommand) Run(args []string) int {
 	cmdFlags := flag.NewFlagSet("instances", flag.ContinueOnError)
 	cmdFlags.StringVar(&c.Role, "role", "", "role tag value to match")
 	cmdFlags.StringVar(&c.Env, "environment", "", "environment tag value to match")
+	cmdFlags.StringVar(&c.Region, "region", "", "region to use")
+	cmdFlags.BoolVar(&c.Public, "public", false, "only show public IP address")
+	cmdFlags.BoolVar(&c.Private, "private", false, "only show private IP address")
 	cmdFlags.Usage = func() { c.Ui.Output(c.Help()) }
 	cmdFlags.Parse(args)
 	var numFlags = 0
 
-	config := aws.NewConfig().WithRegion("ap-southeast-2")
+	var region = "ap-southeast-2"
+	if c.Region != "" {
+		region = c.Region
+	}
+	config := aws.NewConfig().WithRegion(region)
 	sess := session.New(config)
 	svc := ec2.New(sess)
 
@@ -77,6 +90,16 @@ func (c *InstancesCommand) Run(args []string) int {
 		return 1
 	}
 
+	// only display running or pending instances
+	filter := ec2.Filter{
+		Name: aws.String("instance-state-name"),
+		Values: []*string{
+			aws.String("running"),
+			aws.String("pending"),
+		},
+	}
+	filters = append(filters, &filter)
+
 	params := &ec2.DescribeInstancesInput{
 		DryRun:  aws.Bool(false),
 		Filters: filters,
@@ -98,7 +121,8 @@ func (c *InstancesCommand) Run(args []string) int {
 }
 
 func (c *InstancesCommand) Help() string {
-	return "myaws instances: find instances by tag Role and/or Environment"
+	return fmt.Sprintf("xena instances: find instances by tag Role and/or Environment\n\n\t\t--role <value>\trole tag value to match\n\t\t--environment <value>\tenvironment tag to match\n\t\t--region <region>\tregion to run against\n\t\t--public\tjust show the public ip addresses\n\t\t--private\tjust show the private ip addresses\n")
+
 }
 
 func (c *InstancesCommand) Synopsis() string {
@@ -119,12 +143,25 @@ func (c *InstancesCommand) printInstanceInfo(resp *ec2.DescribeInstancesOutput) 
 				}
 			}
 
-			important_vals := []*string{
+			var important_vals []*string
+			important_vals = []*string{
 				inst.InstanceId,
 				&name,
 				inst.PrivateIpAddress,
 				inst.InstanceType,
 				inst.PublicIpAddress,
+			}
+
+			if c.Private {
+				important_vals = []*string{
+					inst.PrivateIpAddress,
+				}
+			}
+
+			if c.Public {
+				important_vals = []*string{
+					inst.PublicIpAddress,
+				}
 			}
 
 			// Convert any nil value to a printable string in case it doesn't
